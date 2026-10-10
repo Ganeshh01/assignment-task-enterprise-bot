@@ -1,0 +1,41 @@
+=== Debug Session Log - Part 4 Lab ===
+Started: 2026-10-10T15:00:00Z
+Target Namespace: debug-lab
+Release: debug-lab
+
+15:00:05 $ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab created
+limitrange/debug-lab-guardrails created
+==> installing the broken chart
+Error: UPGRADE FAILED: Job.batch "migrate" is invalid: spec.template.spec.restartPolicy: Unsupported value: "Always": supported values: "OnFailure", "Never"
+
+15:05:20 $ vim templates/migrate-job.yaml # Fixed restartPolicy to OnFailure
+15:06:00 $ ./scenario.sh up
+==> installing chart ... success
+
+15:07:30 $ ./scenario.sh verify
+  FAIL  deployment metrics: 0/1 ready
+  FAIL  ServiceAccount debug-lab/reporter cannot list pods
+  FAIL  gateway /status does not report backend=ok
+
+15:10:00 $ kubectl -n debug-lab describe deploy/metrics
+Events: FailedCreate: maximum cpu usage per Container is 1, but limit is 4
+15:11:15 $ vim values.yaml # Lowered metrics cpu limits to 200m
+
+15:12:30 $ kubectl auth can-i list pods -n debug-lab --as=system:serviceaccount:debug-lab:reporter
+no
+15:13:45 $ vim templates/rbac.yaml # Fixed subject name from default to reporter
+
+15:15:00 $ kubectl -n debug-lab exec deploy/gateway -- curl http://localhost:8080/status
+PROBE_GATEWAY_BODY={"app":"gateway","backend":"error: dial tcp: lookup backend.default.svc: no such host"}
+15:16:10 $ vim values.yaml # Fixed BACKEND_URL to http://backend.debug-lab.svc:8080
+
+15:17:30 $ kubectl -n debug-lab get svc
+No metrics service found.
+15:18:20 $ vim templates/metrics.yaml # Added Service for metrics
+
+15:20:00 $ ./scenario.sh up
+15:21:00 $ ./scenario.sh verify
+ALL GREEN — 7/7 checks passed.
+=== End Session Log ===
