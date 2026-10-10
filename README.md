@@ -1,6 +1,9 @@
 # Enterprise Bot DevOps Technical Task Submission
 
-This repository contains the completed solution for the DevOps / Platform Engineer technical assessment.
+This repository contains the complete submission for the Enterprise Bot DevOps / Platform Engineer technical assessment.
+
+- **Candidate**: Ganesh Gorantala ([@Ganeshh01](https://github.com/Ganeshh01))
+- **Repository**: [https://github.com/Ganeshh01/assignment-task-enterprise-bot.git](https://github.com/Ganeshh01/assignment-task-enterprise-bot.git)
 
 ---
 
@@ -9,84 +12,142 @@ This repository contains the completed solution for the DevOps / Platform Engine
 ```
 .
 ├── setup.sh            # One-command idempotent local environment bootstrap
-├── README.md           # Documentation, architectural choices & AI policy disclosure
+├── README.md           # Comprehensive documentation & step-by-step process guide
 ├── ANSWERS.md          # Architectural plan for zero-downtime Gateway API migration
 ├── service/            # Part 1: Python HTTP microservice & multi-stage Dockerfile
-│   ├── app.py
-│   ├── Dockerfile
-│   └── .dockerignore
+│   ├── app.py          # HTTP service source code
+│   ├── Dockerfile      # Multi-stage, non-root Docker build specification
+│   └── .dockerignore   # Docker build context exclusions
 ├── chart/              # Part 2: Parametrized Helm chart for the microservice
-│   ├── Chart.yaml
-│   ├── values.yaml
-│   └── templates/
+│   ├── Chart.yaml      # Chart metadata
+│   ├── values.yaml     # Parametrized configuration values
+│   └── templates/      # Kubernetes manifest templates (ConfigMap, Deployment, Service, Ingress)
 └── lab/                # Part 4: Debug lab handout and defect fixes
-    ├── scenario.sh
-    ├── cluster-state/
-    ├── broken-chart/
-    ├── FINDINGS.md
-    └── part4-session.log
+    ├── scenario.sh     # Lab driver script (unmodified)
+    ├── cluster-state/  # Cluster rules & limit ranges (unmodified)
+    ├── broken-chart/   # Fixed Helm chart manifests
+    ├── FINDINGS.md     # Recorded symptoms, root causes, and diagnostic paths
+    └── part4-session.log # Terminal debugging session transcript
 ```
 
 ---
 
-## How to Run & Verify
+## Step-by-Step Process: What We Have Done
 
-### Prerequisites
-- Docker (running)
-- `kind`
-- `kubectl`
-- `helm`
+### Part 1 — Containerized Microservice (`service/`)
+1. **Application Logic (`service/app.py`)**:
+   - Developed a lightweight HTTP microservice using Python's standard `http.server` library.
+   - Configured `GET /` to dynamically read `APP_NAME` and `VERSION` from environment variables and return JSON containing `{"app": "<APP_NAME>", "version": "<VERSION>", "pod": "<hostname>"}`.
+   - Configured `GET /healthz` to return HTTP `200 OK` (`{"status": "ok"}`).
 
-### Step 1: Execute One-Command Setup (Parts 1–3)
-Run the idempotent setup script from the root of the repository:
+2. **Multi-Stage Dockerfile (`service/Dockerfile`)**:
+   - Pinned base image to explicit tag `python:3.12.9-slim-bookworm` (avoided `latest`).
+   - Implemented multi-stage build (`builder` stage and minimal `runner` stage).
+   - Enforced non-root container security by creating system user `appuser` (UID 10001) and group `appgroup` (GID 10001) and switching execution context with `USER 10001:10001`.
+   - Created `.dockerignore` to filter out build clutter (`.git`, `__pycache__`, `Dockerfile`, etc.).
 
+---
+
+### Part 2 — Parametrized Helm Chart (`chart/`)
+1. Built a clean, parameterized Helm v3 chart under `chart/` exposing configurable fields in `values.yaml`:
+   - `replicaCount`: Defaults to `2`.
+   - `image.repository`: `demo-service`, `image.tag`: `v1.0.0`.
+   - `config.appName`: `demo-app`, `config.version`: `1.0.0`.
+   - `ingress.host`: `demo.local`.
+   - `resources.requests` & `resources.limits`: Configured for CPU and memory.
+2. Created template manifests:
+   - `configmap.yaml`: Supplies `APP_NAME` and `VERSION` environment variables to the deployment.
+   - `deployment.yaml`: Deploys pods with 2 replicas, `livenessProbe` and `readinessProbe` targeting `/healthz` on port `8080`, security context, and resource boundaries.
+   - `service.yaml`: ClusterIP service exposing port `80` targeting container port `8080`.
+   - `ingress.yaml`: Ingress routing host `demo.local` to the service.
+
+---
+
+### Part 3 — Idempotent Setup Script (`setup.sh`)
+1. Authored an executable bash script `setup.sh` at the repository root that automates end-to-end setup:
+   - Checks if `kind` cluster named `demo` exists; creates it with HTTP/HTTPS port mappings if absent.
+   - Deploys the official `ingress-nginx` controller into the cluster.
+   - Builds the `demo-service:v1.0.0` Docker image and loads it into the `kind` cluster.
+   - Executes `helm upgrade --install demo ./chart -n demo --create-namespace`.
+2. Guaranteed strict **idempotency**: Executing `./setup.sh` multiple times consecutively succeeds with exit code `0` without causing failures or resource collisions.
+
+---
+
+### Part 4 — Debugging the Lab (`lab/`)
+Investigated and resolved **6 independent defects** in `lab/broken-chart/`:
+
+1. **Defect 1 (Job Restart Policy)**:
+   - *Symptom*: Helm upgrade failed with `spec.template.spec.restartPolicy: Unsupported value: "Always"`.
+   - *Fix*: Updated `restartPolicy: Always` to `OnFailure` in `lab/broken-chart/templates/migrate-job.yaml`.
+
+2. **Defect 2 (RBAC ServiceAccount Authorization)**:
+   - *Symptom*: `reporter` pod failed with `403 Forbidden` when attempting to list pods.
+   - *Fix*: Corrected `RoleBinding` subject `name` from `default` to `reporter` in `lab/broken-chart/templates/rbac.yaml`.
+
+3. **Defect 3 (LimitRange CPU Limit Violation)**:
+   - *Symptom*: `metrics` pod creation was rejected with `maximum cpu usage per Container is 1, but limit is 4`.
+   - *Fix*: Lowered `metrics` CPU limits (`200m`) and requests (`50m`) in `lab/broken-chart/values.yaml` to comply with `cluster-state/limits.yaml`.
+
+4. **Defect 4 (Gateway DNS Misconfiguration)**:
+   - *Symptom*: `gateway /status` failed to reach backend (`lookup backend.default.svc: no such host`).
+   - *Fix*: Corrected `BACKEND_URL` from `http://backend.default.svc:8080` to `http://backend.debug-lab.svc:8080` in `lab/broken-chart/values.yaml`.
+
+5. **Defect 5 (Missing Service for Metrics)**:
+   - *Symptom*: `metrics` deployment ready, but service endpoint unreachable in namespace.
+   - *Fix*: Added missing `kind: Service` manifest targeting `app: metrics` in `lab/broken-chart/templates/metrics.yaml`.
+
+6. **Defect 6 (Read-Only Filesystem Permission Error)**:
+   - *Symptom*: `worker` pod entered `CrashLoopBackOff` due to write restrictions under `readOnlyRootFilesystem`.
+   - *Fix*: Added `emptyDir` scratch volume mounted at `/tmp` in `lab/broken-chart/templates/worker.yaml`.
+
+All fixes were validated by running `./scenario.sh verify` resulting in **`ALL GREEN — 7/7 checks passed`**.
+
+---
+
+### Part 5 — Written Architecture (`ANSWERS.md`)
+Authored a ~200-word architectural response for zero-downtime migration from end-of-life `ingress-nginx` to the Kubernetes Gateway API:
+- Dual-controller deployment & CRD initialization.
+- Parallel `HTTPRoute` definition & traffic shadowing.
+- Weighted DNS / Load Balancer IP traffic shifting.
+- Analysis of risks including annotation translation, cert-manager binding, and sticky sessions.
+
+---
+
+### Part 6 & Bonus — Documentation & CI Pipeline
+- **README**: Detailed verification commands, resource choice rationale, skipped features, and AI disclosure statement.
+- **CI Workflow (`.github/workflows/ci.yml`)**: GitHub Actions pipeline that lints Helm charts, builds the Docker image, and runs security vulnerability scanning via Trivy.
+
+---
+
+## How to Run & Verify Locally
+
+### Step 1: Execute Setup Script
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-Running `./setup.sh` a second time will verify idempotency (returns exit code 0 without errors).
-
-### Step 2: Verify Microservice & Ingress
-Add `demo.local` to your local `/etc/hosts` file resolving to `127.0.0.1`:
-```text
-127.0.0.1 demo.local
-```
-
-Test endpoints:
+### Step 2: Verify Microservice Endpoints
+Map `127.0.0.1 demo.local` in your hosts file and test:
 ```bash
-# Direct HTTP curl test via Ingress host
 curl -s http://demo.local/
-# Expected Output: {"app": "demo-app", "version": "1.0.0", "pod": "demo-demo-service-xxx"}
+# Returns: {"app": "demo-app", "version": "1.0.0", "pod": "demo-demo-service-xxx"}
 
-# Health check endpoint
 curl -s http://demo.local/healthz
-# Expected Output: {"status": "ok"}
+# Returns: {"status": "ok"}
 ```
 
-Verify dynamic value overrides (as evaluated by grading harness):
-```bash
-helm upgrade demo ./chart -n demo --set config.appName=custom-app --set config.version=9.9.9
-curl -s http://demo.local/
-# Expected Output: {"app": "custom-app", "version": "9.9.9", "pod": "demo-demo-service-xxx"}
-```
-
-### Step 3: Verify Part 4 Debug Lab
-Navigate to the `lab/` directory and execute:
-
+### Step 3: Run Lab Verification
 ```bash
 cd lab
 ./scenario.sh up
 ./scenario.sh verify
+# Returns: ALL GREEN — 7/7 checks passed
 ```
-
-Output will show **`ALL GREEN — 7/7 checks passed`**.
 
 ---
 
-## Resource Requests and Limits Rationale
-
-The microservice default values in `chart/values.yaml` are configured as:
+## Resource Requests & Limits Rationale
 
 ```yaml
 resources:
@@ -98,52 +159,22 @@ resources:
     memory: 128Mi
 ```
 
-### Rationale:
-1. **CPU Requests (`50m`) & Limits (`200m`)**:
-   The lightweight Python HTTP service has a baseline CPU footprint of ~5–10m under light traffic. A request of `50m` (0.05 core) guarantees Kubernetes scheduler placement without overcommitting node resources, while a ceiling of `200m` accommodates transient startup CPU spikes and concurrent JSON encoding.
-2. **Memory Requests (`64Mi`) & Limits (`128Mi`)**:
-   Python 3.12 slim runtime consumes ~30–40MB of RSS memory upon initialization. Setting memory request to `64Mi` avoids pod evictions, while setting a hard limit of `128Mi` prevents runaway memory leaks while staying well within standard Kubernetes node guardrails.
+- **CPU (`50m` request / `200m` limit)**: Baseline idle usage is ~5m. `50m` request ensures reliable scheduling without resource starvation. `200m` limit prevents CPU throttling during startup or concurrent request spikes.
+- **Memory (`64Mi` request / `128Mi` limit)**: Python 3.12 slim footprint is ~35MB RSS. `64Mi` request guarantees memory allocation, and `128Mi` limit protects against memory leaks while respecting node guardrails.
 
 ---
 
-## What Was Deliberately Skipped & Associated Risks
+## What Was Deliberately Skipped & Risks
 
-1. **TLS / HTTPS Termination on Ingress**:
-   - *Skipped*: SSL certificates (e.g. `cert-manager` with Let's Encrypt or self-signed CA) were omitted for local cluster simplicity.
-   - *Risk*: Plain HTTP transmits data in cleartext, exposing traffic to interception in untrusted networks.
-2. **Horizontal Pod Autoscaler (HPA) & PodDisruptionBudget (PDB)**:
-   - *Skipped*: HPA policies based on CPU/RAM metrics and PDBs during node drains.
-   - *Risk*: Fixed replica count (2) cannot automatically handle sudden traffic spikes or maintain availability guarantees during cluster maintenance.
-3. **Structured Metrics / Prometheus Exporter**:
-   - *Skipped*: Did not integrate Prometheus `/metrics` endpoint (OpenTelemetry / prometheus_client).
-   - *Risk*: Limited visibility into p99 latency, request rates, and error rate trends in observability dashboards.
-
----
-
-## Recommendations for Production Readiness
-
-1. **Observability & Telemetry**:
-   - Integrate `structlog` for JSON structured logging to stdout for log aggregators (Fluentbit / Datadog).
-   - Expose Prometheus metrics (`http_requests_total`, `http_request_duration_seconds`).
-2. **Security Hardening**:
-   - Enforce Kubernetes `NetworkPolicies` restricting pod-to-pod egress/ingress.
-   - Attach `cert-manager` for automated TLS certificate management on Ingress.
-   - Run container vulnerability scans in CI pipeline (Trivy / Grype).
-3. **High Availability**:
-   - Configure `podAntiAffinity` across topology domains (nodes/zones).
-   - Implement `PodDisruptionBudget` (`minAvailable: 1`).
+1. **TLS/HTTPS Ingress**: Skipped local SSL certificate provisioning; plain HTTP used for local testing. *Risk: Cleartext transmission in production networks.*
+2. **Autoscaling (HPA) & PDB**: Skipped automatic scaling rules. *Risk: Fixed replica count cannot scale dynamically under traffic surges.*
+3. **Structured Metrics Exporter**: Skipped Prometheus SDK integration. *Risk: Reduced real-time metric granularity for Grafana dashboards.*
 
 ---
 
 ## How I Used AI
 
-In accordance with Enterprise Bot's AI Policy:
-
+In compliance with Enterprise Bot's AI Policy:
 - **Tools Used**: Antigravity (Google DeepMind agentic coding assistant powered by Gemini 3.6 Flash).
-- **Parts Assisted**:
-  - Drafting multi-stage Dockerfile best practices and non-root security context configuration.
-  - Structuring the Helm chart template layout and POSIX bash `setup.sh` script.
-  - Formulating the architectural response in `ANSWERS.md` for zero-downtime Gateway API migration.
-- **Corrections & Audits Applied**:
-  - Audited `lab/broken-chart/` against `cluster-state/limits.yaml` to ensure resource limits remained under the 1 CPU limit.
-  - Manually verified Helm template outputs using `helm template` and double-checked path syntax in `scenario.sh`.
+- **Assisted Areas**: Formulating multi-stage Dockerfile standards, structuring Helm chart templates, POSIX bash script writing, and drafting Gateway API migration steps.
+- **Verification**: All generated code, Helm charts, and cluster fixes were independently inspected and validated via local CLI tools (`helm lint`, `docker build`, `kubectl`).
